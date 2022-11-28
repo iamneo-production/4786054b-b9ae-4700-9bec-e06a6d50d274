@@ -1,0 +1,148 @@
+import pandas as pd
+import yfinance as yf
+import numpy as np
+import joblib
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score
+from sklearn.neural_network import MLPClassifier
+from xgboost import XGBClassifier
+import seaborn as sns; sns.set()
+import matplotlib.pyplot as plt
+
+import sys
+sys.path.append('..')
+from src.features.build_features import *
+def stock_score(y_pred):
+    """
+        Returns the annual return of the predictions made by the algorithm,
+            and the position history of the algorithm (used for plots).
+                """
+
+                    ticker_df = yf.download('DJIA', start='2004-04-09', end='2020-06-26')
+                        ticker_df['pct_change'] = 1 + ticker_df.Close.pct_change()
+                            ticker_df = ticker_df[1:]
+                                ticker_train = ticker_df[:int(len(ticker_df) * 0.8)]
+                                    ticker_test = ticker_df[int((len(ticker_df)) * 0.8):]
+                                        
+                                            if len(y_pred) == len(ticker_train):
+                                                    stock = ticker_train
+                                                        elif len(y_pred) == len(ticker_test):
+                                                                stock = ticker_test
+                                                                    else:
+                                                                            raise IndexError(f'Not the length of test or train. Wrong series? {len(y_pred)}')
+
+                                                                                position = 100
+                                                                                    history = []
+                                                                                        
+                                                                                            i = 0
+                                                                                                while i < len(y_pred):
+                                                                                                        if y_pred[i] == 1:
+                                                                                                                    position *= stock['pct_change'][i]
+                                                                                                                            else:
+                                                                                                                                        position /= stock['pct_change'][i]
+
+                                                                                                                                                history.append(position)
+                                                                                                                                                        i += 1
+
+                                                                                                                                                            ann_return = ((1+((position - 100) / 100)) ** (1 / (len(y_pred)/365)) - 1) * 100
+
+                                                                                                                                                                return ann_return, history
+                                                                                                                                                                %%capture
+
+                                                                                                                                                                djia = yf.download('DJIA', start='2004-01-01', end='2020-06-26')
+                                                                                                                                                                search = pd.read_csv('../data/raw/daily/stock_market.csv')
+                                                                                                                                                                df = pd.DataFrame()
+
+                                                                                                                                                                df['target'] = target_binary(djia.Close)[1:].astype(int)
+
+                                                                                                                                                                for length in [3, 7, 14, 30, 90]:
+                                                                                                                                                                    search[f'SMA_delta-{length}'] = research(search.Adjusted, length=length)
+                                                                                                                                                                        search[f'delta-{length}'] = delta(search.Adjusted, length=length)
+                                                                                                                                                                            search[f'pct_change-{length}'] = pct_change(search.Adjusted, length=length)
+                                                                                                                                                                                search[f'SMA-{length}'] = sma(search.Adjusted, length=length)
+                                                                                                                                                                                    search[f'EMA-{length}'] = ema(search.Adjusted, length=length)
+
+                                                                                                                                                                                    # Bollinger bands.
+                                                                                                                                                                                    search['BBAND_U-20-2'] = search.Adjusted.rolling(20).mean() + 2*search.Adjusted.rolling(20).std()
+                                                                                                                                                                                    search['BBAND_L-20-2'] = search.Adjusted.rolling(20).mean() - 2*search.Adjusted.rolling(20).std()
+                                                                                                                                                                                    search['BBAND_U-20-1'] = search.Adjusted.rolling(20).mean() + search.Adjusted.rolling(20).std()
+                                                                                                                                                                                    search['BBAND_L-20-1'] = search.Adjusted.rolling(20).mean() - search.Adjusted.rolling(20).std()
+                                                                                                                                                                                    search['BBAND_U-10-1'] = search.Adjusted.rolling(10).mean() + search.Adjusted.rolling(10).std()
+                                                                                                                                                                                    search['BBAND_L-10-1'] = search.Adjusted.rolling(10).mean() - search.Adjusted.rolling(10).std()
+                                                                                                                                                                                    search['BBAND_U-10-2'] = search.Adjusted.rolling(10).mean() + 2*search.Adjusted.rolling(10).std()
+                                                                                                                                                                                    search['BBAND_L-10-2'] = search.Adjusted.rolling(10).mean() - 2*search.Adjusted.rolling(10).std()
+
+                                                                                                                                                                                    features = search.Date.to_frame()
+                                                                                                                                                                                    for lag in [3,4,5,6,7,8,9,10]:
+                                                                                                                                                                                        shifted = search.drop('Date', axis=1).shift(lag)
+                                                                                                                                                                                            shifted.columns = [f'{column}_shifted_by_{lag}' for column in shifted.columns]
+                                                                                                                                                                                                features = pd.concat((features, shifted), axis=1)
+                                                                                                                                                                                                    
+                                                                                                                                                                                                    features = features.dropna()
+
+                                                                                                                                                                                                    djia['target'] = target_binary(djia.Close)
+                                                                                                                                                                                                    djia = djia.drop(['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume'], axis=1)
+                                                                                                                                                                                                    djia = djia.reset_index()
+
+                                                                                                                                                                                                    features['Date'] = pd.to_datetime(features.Date)
+                                                                                                                                                                                                    data = pd.merge(djia, features, on='Date')
+                                                                                                                                                                                                    data['target'] = data.target.astype(int)
+                                                                                                                                                                                                    data = data.drop('Date', axis=1)
+
+                                                                                                                                                                                                    X = data.drop('target', axis=1)
+                                                                                                                                                                                                    y = data.target
+
+                                                                                                                                                                                                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+                                                                                                                                                                                                    correlations = np.abs(X_train.corrwith(y_train))
+                                                                                                                                                                                                    features = list(correlations.sort_values(ascending=False)[0:50].index)
+                                                                                                                                                                                                    X_train = X_train[features]
+                                                                                                                                                                                                    X_test = X_test[features]
+                                                                                                                                                                                                    parameters = {'learning_rate': [0.1, 0.01, 0.001],
+                                                                                                                                                                                                                   'gamma': [0.01, 0.1, 0.3, 0.5, 1, 1.5, 2],
+                                                                                                                                                                                                                                  'max_depth': [2, 4, 7, 10],
+                                                                                                                                                                                                                                                 'colsample_bytree': [0.3, 0.6, 0.8, 1.0],
+                                                                                                                                                                                                                                                                'subsample': [0.2, 0.4, 0.5, 0.6, 0.7],
+                                                                                                                                                                                                                                                                               'reg_alpha': [0, 0.5, 1],
+                                                                                                                                                                                                                                                                                              'reg_lambda': [1, 1.5, 2, 3, 4.5],
+                                                                                                                                                                                                                                                                                                             'min_child_weight': [1, 3, 5, 7],
+                                                                                                                                                                                                                                                                                                                            'n_estimators': [100, 250, 500, 1000],
+                                                                                                                                                                                                                                                                                                                            }
+
+                                                                                                                                                                                                                                                                                                                            rf = RandomizedSearchCV(XGBClassifier(), param_distributions=parameters,
+                                                                                                                                                                                                                                                                                                                                                    cv=5, n_iter=20, scoring='recall', n_jobs=-1)
+
+                                                                                                                                                                                                                                                                                                                                                    rf.fit(X_train, y_train)
+                                                                                                                                                                                                                                                                                                                                                    y_test_preds = rf.predict(X_test)
+                                                                                                                                                                                                                                                                                                                                                    y_train_preds = rf.predict(X_train)
+                                                                                                                                                                                                                                                                                                                                                    print('Accuracy:', accuracy_score(y_test, y_test_preds))
+                                                                                                                                                                                                                                                                                                                                                    print('F1:', f1_score(y_test, y_test_preds))
+                                                                                                                                                                                                                                                                                                                                                    print('Recall:', recall_score(y_test, y_test_preds))
+                                                                                                                                                                                                                                                                                                                                                    print('Precision:', precision_score(y_test, y_test_preds))
+                                                                                                                                                                                                                                                                                                                                                    ann_return, history = stock_score(y_test_preds)
+                                                                                                                                                                                                                                                                                                                                                    print('Annual return:', ann_return)
+
+                                                                                                                                                                                                                                                                                                                                                    sns.lineplot(range(len(history)), history)
+
+                                                                                                                                                                                                                                                                                                                                                    parameters = {
+                                                                                                                                                                                                                                                                                                                                                        'solver': ['sgd'], 
+                                                                                                                                                                                                                                                                                                                                                            'max_iter': [1000],
+                                                                                                                                                                                                                                                                                                                                                                'alpha': 10.0 ** -np.arange(1, 10),
+                                                                                                                                                                                                                                                                                                                                                                    'hidden_layer_sizes': np.arange(10, 15),
+                                                                                                                                                                                                                                                                                                                                                                        'random_state': [0],
+                                                                                                                                                                                                                                                                                                                                                                            'learning_rate_init': [0.15],
+                                                                                                                                                                                                                                                                                                                                                                                'learning_rate': ['constant'],
+                                                                                                                                                                                                                                                                                                                                                                                    'shuffle': [False],
+                                                                                                                                                                                                                                                                                                                                                                                        'momentum': np.random.uniform(low=0.8, high=1, size=(50,))
+                                                                                                                                                                                                                                                                                                                                                                                        }
+
+                                                                                                                                                                                                                                                                                                                                                                                        rf = RandomizedSearchCV(MLPClassifier(), param_distributions=parameters,
+                                                                                                                                                                                                                                                                                                                                                                                                                cv=5, n_iter=20, scoring='recall', n_jobs=-1)
+
+                                                                                                                                                                                                                                                                                                                                                                                                                rf.fit(X_train, y_train)
+                                                                                                                                                                                                                                                                                                                                                                                                                y_test_preds = rf.predict(X_test)
+                                                                                                                                                                                                                                                                                                                                                                                                                y_train_preds = rf.predict(X_train)
+                                                                                                                                                                                                                                                                                                                                                                                                                ann_return, history = stock_score(y_test_preds)
+                                                                                                                                                                                                                                                                                                                                                                                                                print('Annual return:', ann_return)
+
+                                                                                                                                                                                                                                                                                                                                                                                                                sns.lineplot(rang   e(len(history)), history)
